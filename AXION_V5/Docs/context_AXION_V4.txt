@@ -1,0 +1,274 @@
+AXION V4 — CONTEXTE GLOBAL
+Version interne de référence : V3.3 → V4.0 (pré-finale)
+Date : Octobre 2025
+
+────────────────────────────────────────────
+SYSTÈME GÉNÉRAL
+────────────────────────────────────────────
+
+AXION est un système embarqué basé sur un ESP32 (DevkitC USB-C, module ELEGOO)
+servant d’unité centrale pour l’analyse et l’affichage en temps réel
+de données de performance automobile. Il intègre capteurs inertiels, GPS,
+OBD2 Bluetooth, horloge RTC, EEPROM, et un écran OLED SSD1322.
+
+Le projet est développé sous PlatformIO / VS Code en C++,
+avec la librairie Adafruit_GFX (pour l’OLED) et la gestion I²C via Wire.
+
+Objectif principal :
+→ Fournir un tableau de bord automobile haute précision (11 modes UI)
+→ Intégrer GPS + IMU + OBD2 + RTC dans un affichage 256×64 monochrome.
+→ Supporte enregistrement de données 10 Hz synchronisées PPS.
+
+────────────────────────────────────────────
+ARCHITECTURE MATÉRIELLE (V4)
+────────────────────────────────────────────
+
+Séparation physique :
+• Module A1 : Gestion d’alimentation (Power)
+• Module A2 : Calcul & capteurs
+• Module B : Interface utilisateur (OLED + boutons + LED + buzzer)
+
+Tensions :
+• Entrée : 5 V USB-C ou 12 V JST-XH
+• Régulation principale : Mini360 → 3.30 V
+• Communication logique : 3.3 V sur tous les bus
+
+Câble A1 ↔ A2 : JST-2P
+  Pin 1 = 3.3 V
+  Pin 2 = GND
+
+Câble A2 ↔ B : JST-8
+  1 3V3 | 2 GND | 3 SDA | 4 SCL | 5 MOSI | 6 SCLK | 7 DC | 8 PWM_BUZZ
+
+────────────────────────────────────────────
+AFFECTATION DES GPIO (ESP32 – MODULE A2)
+────────────────────────────────────────────
+
+I²C :
+  SDA = 21 / SCL = 22  
+  Périphériques : MPU9250 @0x69, DS3231 @0x68, AT24C32 @0x50, PCF8574 @0x20
+
+SPI (écran SSD1322) :
+  MOSI = 23, SCLK = 18, DC = 19  
+  CS = PCF8574 P6 (LOW = actif), RESET = PCF8574 P5 (LOW = actif)
+
+UART2 (GPS NEO-8M) :
+  RX2 = 16, TX2 = 17, PPS = GPIO26 (1 Hz)
+
+Interruption capteurs :
+  INT_MPU9250 → GPIO33  
+  SQW_DS3231 → GPIO32 (1 Hz)
+
+PWM audio :
+  GPIO25 → 2N7000 → buzzer passif
+
+Bluetooth :
+  ELM327 OBD2 via SPP (UART virtuel)
+
+────────────────────────────────────────────
+MODULES PHYSIQUES
+────────────────────────────────────────────
+
+A1 (20×80 mm) — Power
+  • Mini360 (buck 5-23 V → 3.3 V)
+  • PTC RUEF090
+  • Schottky 1N5822 (12 V only)
+  • TVS SA5.0A
+  • Condos : 100 µF entrée / 0.1 µF entrée / 10 µF sortie / 0.1 µF sortie
+  • Connecteurs : USB-C (5 V), JST-XH (12 V), JST-2P (vers A2)
+
+A2 (80×80 mm) — Logic & Sensors
+  • ESP32 DevkitC USB-C (ELEGOO)
+  • IMU MPU9250 (0x69)
+  • RTC DS3231 + EEPROM AT24C32 (0x68 / 0x50)
+  • GPS NEO-8M (UART2)
+  • Connecteur JST-8 → Module B
+  • Signaux INT=33, PPS=26, SQW=32
+
+B (100×55 mm) — Interface Utilisateur
+  • OLED SSD1322 256×64 (SPI)
+  • PCF8574 @0x20 (LED / boutons / RESET / CS)
+  • LED bicolore KY-011 (P3=rouge, P4=vert, anode commune 3.3 V)
+  • 3 boutons UP/DOWN/SELECT (P0–P2, actifs bas)
+  • Buzzer passif + 2N7000 (GPIO25)
+  • Pull-ups 10 kΩ sur CS/RESET SSD1322
+
+────────────────────────────────────────────
+CAPTEURS & INTERFACES
+────────────────────────────────────────────
+
+MPU9250 (IMU 9 axes)
+  Adresse : 0x69 · AD0 = 3.3 V
+  Plage accel ±2 G · gyro ±500 dps · cadence 200 Hz
+  INT → GPIO33 (réveil / sampling)
+  Calibration auto 3–5 s au boot
+  Fusion : Madgwick/Mahony filter
+
+DS3231 + AT24C32
+  RTC @0x68 / EEPROM @0x50
+  SQW → GPIO32 (1 Hz)
+  EEPROM = 4 kB (offsets & calibrations)
+
+GPS NEO-8M
+  UART2 (16/17) · PPS → 26
+  10 Hz NMEA output, PPS 1 Hz
+  Antenne active 3.3 V / 45–60 mA
+
+ELM327 Bluetooth OBD2
+  Liaison SPP · Handshake ATZ, ATE0, ATL0, ATSP0
+  Lecture PIDs (1–5 Hz) : RPM, vitesse, temp, throttle…
+  Effacement DTC sur SELECT long (2 s)
+
+PCF8574 @0x20
+  P0–P2 : Boutons UP/DOWN/SELECT (actif bas)
+  P3/P4 : LED rouge/verte LOW = ON
+  P5 : RESET OLED (actif bas)
+  P6 : CS OLED (actif bas)
+  P7 : Réservé (extension)
+
+────────────────────────────────────────────
+ÉCRAN OLED SSD1322 256×64 (SPI)
+────────────────────────────────────────────
+
+• Bus SPI : MOSI 23, SCLK 18, DC 19
+• CS = PCF8574 P6 (LOW actif), RESET = PCF8574 P5
+• Thème : fond noir / texte blanc (4-bit grayscale)
+• FPS : 30–60 selon page
+• Affichage double-buffer si lib compatible
+• Layout : plein écran par mode, marges 4–6 px
+
+────────────────────────────────────────────
+LOGIQUE LOGICIELLE (FIRMWARE)
+────────────────────────────────────────────
+
+Structure principale du code (ESP32 C++) :
+
+1. BOOT SEQUENCE
+   - UART0 debug 115200 bannière
+   - I²C init + scan
+   - PCF8574 setup (P0-P2 in, P3-P6 out)
+   - OLED RESET via P5 LOW/HIGH > 10 ms
+   - SPI init (MOSI=23, SCLK=18, DC=19)
+   - RTC DS3231 → SQW 1 Hz
+   - GPS UART2 115200 bps + ISR PPS
+   - MPU9250 init & calibration
+   - EEPROM load offsets
+   - Bluetooth ELM327 handshake AT
+
+2. MAIN LOOP
+   - Lecture capteurs IMU/GPS/OBD + RTC
+   - Mise à jour UI (30–60 FPS)
+   - Gestion boutons (UP/DOWN/SELECT)
+   - Feedback LED + buzzer
+   - Modes sleep (Light/Deep) selon inactivité
+
+3. SLEEP MODES
+   - Light Sleep : OLED OFF, réveil bouton/INT IMU → 3–5 mA
+   - Deep Sleep : bus OFF, EXT0=SELECT ou EXT1=INT → < 1.5 mA
+
+4. LOGGER 10 Hz (aligné PPS)
+   - t, lat, lon, v_gps, RPM, THR, Gx, Gy, θ_drift, HDOP, sats, score
+   - Écriture CSV ou USB CDC
+
+────────────────────────────────────────────
+INTERFACE UTILISATEUR (11 MODES FONCTIONNELS)
+────────────────────────────────────────────
+
+1. Dashboard  
+   Vue principale : vitesse (GPS/OBD), RPM, G-lat/long, états capteurs, LED alerte.  
+   Mode sécurité si capteur critique manquant.
+
+2. G-Forces  
+   Vecteurs latéraux/longitudinaux + min/max.  
+   Styles : jauge circulaire, trace vectorielle, compas G.  
+   Reset auto (SQW 1 Hz).
+
+3. Accel & Brake Test  
+   Tests 0–60 / 0–100 / 100–0 / perso.  
+   Analyse : temps, distance, G-max, pente GNSS, freinage effectif.
+
+4. Drag & Launch Test  
+   Combinaison Drag Race (¼, ⅛ mi) et Launch Control.  
+   Chronos PPS, reaction timer, LED + buzzer.  
+
+5. Lap Timer  
+   Géofence GNSS auto, ghost lap, analyse G/vitesse/drift.  
+   Fusion GPS+IMU + OBD → laps et splits.
+
+6. Crawling  
+   Mode tout-terrain : altitude GNSS, inclinomètre 3D, pente + G-vector.  
+   Affichages bulle, vectoriel, analogique.
+
+7. Drift  
+   Calcul θ_drift = ψ_IMU − ψ_GPS.  
+   Actif > 20 km/h si HDOP OK.  
+   Scoring live : |θ| + G_lat + vitesse.  
+   LED/buzzer indiquent seuils.
+
+8. Compass  
+   Fusion cap IMU + azimut GNSS.  
+   Affichages circulaire, cylindrique, ou type avion.
+
+9. Diagnostics OBD2  
+   Lecture PIDs, affichage moteur, effacement DTC sécurisé.  
+
+10. Settings  
+   GPS Stats, Sensor Graphs, Live Sensors, System Health, Calibration,  
+   Logger 10 Hz, Firmware tools, Bluetooth pairing, unités & contraste.
+
+11. Bench / System Tests  
+   Benchmark CPU/UI, vérification bus I²C/SPI/UART, mode debug.
+
+────────────────────────────────────────────
+LOGGING & SYNCHRONISATION
+────────────────────────────────────────────
+
+• Cadence PPS 1 Hz → horodatage global GPS + RTC.  
+• Logger 10 Hz (aligné PPS) avec fusion IMU 200 Hz → 10 Hz moyenné.  
+• Champs CSV :  
+  t_ms, lat, lon, alt, v_gps, azimuth, sats, HDOP, Gx, Gy, yaw, pitch, roll, RPM, THR, θ_drift, drift_score, flags.  
+• Export via USB ou carte SD optionnelle.
+
+────────────────────────────────────────────
+SOMMAIRE DES LIBRAIRIES RECOMMANDÉES
+────────────────────────────────────────────
+
+• Adafruit_GFX + Adafruit_SSD1322 ou U8G2 pour OLED  
+• Wire pour I²C  
+• HardwareSerial (UART2 GPS)  
+• BluetoothSerial (ELM327)  
+• MPU9250 (communauté Arduino)  
+• RTClib ou DS3231 custom pour RTC  
+• EEPROM ou AT24C32 driver I²C  
+• Ticker ou Task Scheduler pour cadences UI/Logger
+
+────────────────────────────────────────────
+TESTS & VALIDATION
+────────────────────────────────────────────
+
+• Tension 3.30 ± 0.05 V @ 220 mA  
+• Ripple < 80 mVp-p  
+• Mini360 < 65 °C après 30 min  
+• Scan I²C : 0x20, 0x50, 0x68, 0x69  
+• UART2 GPS OK @ 115200 bps, PPS stable 1 Hz  
+• OLED boot → logo AXION → menu scroll fluide  
+• Conso Light Sleep ≈ 4 mA · Deep < 1.5 mA  
+• UI 11 écrans validés (Drift inclus)
+
+────────────────────────────────────────────
+NOTES DE VERSION
+────────────────────────────────────────────
+
+AXION V2.2 → V2.3 → V4.0 :  
+• Séparation Module A en A1 + A2  
+• Entrée Dual USB-C (5 V) / JST-12 V  
+• Diode sélective 1N5822 sur 12 V seulement  
+• C3 Tantale → Céramique 10 µF 25 V (X7R)  
+• Connecteurs JST-XH et JST-2P standardisés  
+• Silkscreen minimaliste + repères clairs  
+• UI 11 modes finalisés (V4)  
+• Architecture prête pour production Jan 2026
+
+────────────────────────────────────────────
+FIN DU CONTEXTE AXION V4
+────────────────────────────────────────────
